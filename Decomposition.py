@@ -1,17 +1,19 @@
-from tensorflow import keras
 from tensorflow.keras.preprocessing.image import save_img
-from tensorflow.keras import Sequential
-from tensorflow.keras.layers import Flatten, Dense, BatchNormalization
-from tensorflow.keras.datasets.mnist import load
-from tensorflow.keras.utils import to_categorical
-from tensorflow.keras.optimizers import Adam
-from tensorflow.keras.losses import categorical_crossentropy, mean_squared_error
 import numpy as np
 import tensorflow as tf
 import matplotlib.pyplot as plt
+from tensorflow.keras import Sequential
+from tensorflow.keras.layers import Flatten, Dense, BatchNormalization
+from tensorflow.keras.datasets.mnist import load_data
+from tensorflow.keras.utils import to_categorical
+from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.losses import categorical_crossentropy
+from tensorflow.keras.losses import mean_squared_error
+from tensorflow import keras
 import os
 from glob import glob
 from PIL import Image
+import random
 
 
 def down_block(x, filters, kernel_size=(3, 3), padding="same", strides=1):
@@ -67,7 +69,7 @@ def build_model():
     u4_2 = up_block(u3_2, c1, f[0])  # 64 -> 128
 
     outputs_2 = keras.layers.Conv2D(
-        3, (1, 1), padding="same", activation="sigmoid", name="shading_output")(u4_2)
+        1, (1, 1), padding="same", activation="sigmoid", name="shading_output")(u4_2)
 
     outputs_3 = tf.math.multiply(
         outputs_1, outputs_2, name="reconstruction_output")
@@ -79,6 +81,27 @@ def build_model():
 
 model = build_model()
 model.summary()
+#tf.keras.utils.plot_model(model, to_file='model.png', show_shapes=True)
+#from IPython.display import Image
+#Image(retina=True, filename='model.png')
+
+IMG_SHAPE = (128, 128, 3)
+pretrain_model_path = "/content/drive/My Drive/Samsung Project/Decomposition Latest/vgg16_weights_tf_dim_ordering_tf_kernels_notop.h5"
+
+VGG = tf.keras.applications.VGG16(
+    input_shape=IMG_SHAPE, include_top=False, weights='imagenet')
+#VGG.load_weights(pretrain_model_path)
+print(VGG.summary())
+VGG.trainable = False
+for layer in VGG.layers:
+    layer.trainable = False
+
+#image_batch = np.ones((5,128,128,3),np.float32)
+
+last_layer = tf.keras.models.Model(
+    inputs=VGG.input, outputs=VGG.get_layer('block3_pool').output)
+last_layer.trainable = False
+#res = last_layer.predict(image_batch)
 
 input_high_path = '/content/drive/My Drive/Samsung Project/Decomposition Latest/our485/high'
 input_low_path = '/content/drive/My Drive/Samsung Project/Decomposition Latest/our485/low'
@@ -89,8 +112,7 @@ file_path = '/content/drive/My Drive/Samsung Project/Decomposition Latest/our485
 # image_crop_y = 128
 # image_crop_x = 128
 
-image_y_crop_size = 128
-image_x_crop_size = 128
+patch_size = 128
 batch_size = 10
 
 ##FOR MODEL
@@ -111,88 +133,8 @@ save_weights_only = True
 lr = 1e-4
 momentum = 0.9
 decay = 0.0625
-epochs = 2000
+epochs = 100
 data_size = 240
-# period = 2
-
-
-#tf.enable_eager_execution()
-
-def random_crop_image_and_labels(input_high, input_low, h, w):
-    combined = tf.concat([input_high, input_low], axis=2)
-    #combined = tf.concat([combined, reflect_label], axis=2)
-    combined_crop = tf.image.random_crop(combined, size=[h, w, 9])
-    cropped_input_high = combined_crop[:, :, :3]
-    cropped_input_low = combined_crop[:, :, 3:6]
-    #cropped_reflect_label = combined_crop[:, :, 6:]
-    cropped_input_high.set_shape([h, w, 3])
-    cropped_input_low.set_shape([h, w, 3])
-    #cropped_shade_label.set_shape([h, w, 3])
-    #cropped_reflect_label.set_shape([h, w, 3])
-    return cropped_input_high, cropped_input_low
-
-
-def parse_function(x, y):
-    input_high = tf.io.read_file(input_high_path + '/' + x)
-    input_high = tf.cast(tf.image.decode_png(
-        input_high, channels=3), dtype=tf.float32)
-    input_low = tf.io.read_file(input_low_path + '/' + y)
-    input_low = tf.cast(tf.image.decode_png(
-        input_low, channels=3), dtype=tf.float32)
-
-    input_high, input_low = random_crop_image_and_labels(
-        input_high, input_low, image_x_crop_size, image_y_crop_size)
-
-    #img_x, img_y, img_z = random_crop_image_and_labels(img_x, img_y, img_z, image_x_crop_size, image_y_crop_size)
-
-    input_high = input_high/255.0
-    input_low = input_low/255.0
-    #img_z = img_z/255.0
-    # print(img_x.shape, img_y.shape)
-    return input_high, input_low
-    #return img_x, {"tf_op_layer_reconstruction_output": img_x,"shading_output": img_y,"reflectance_output": img_z}
-
-
-def parse_function_test(x, y, z):
-    img_x = tf.io.read_file(input_path + '/' + x)
-    img_x = tf.cast(tf.image.decode_png(img_x, channels=3), dtype=tf.float32)
-    img_y = tf.io.read_file(output_shade_path + '/' + y)
-    img_y = tf.cast(tf.image.decode_png(img_y, channels=3), dtype=tf.float32)
-    img_z = tf.io.read_file(output_reflect_path + '/' + z)
-    img_z = tf.cast(tf.image.decode_png(img_z, channels=3), dtype=tf.float32)
-    #img_x, img_y, img_z = random_crop_image_and_labels(img_x, img_y, img_z, image_x_crop_size, image_y_crop_size)
-
-    img_x = img_x/255.0
-    img_y = img_y/255.0
-    img_z = img_z/255.0
-    # print(img_x.shape, img_y.shape)
-    return img_x
-
-
-def load_data():
-    files = os.listdir(file_path)[:data_size]
-    BUFFER_SIZE = len(files)
-    ds = tf.data.Dataset.from_tensor_slices((files, files))
-    ds = ds.shuffle(BUFFER_SIZE)
-    ds = ds.map(parse_function,
-                num_parallel_calls=tf.data.experimental.AUTOTUNE)
-    ds = ds.batch(batch_size, drop_remainder=True)
-    ds = ds.prefetch(1)
-    #print(ds)
-    return ds
-
-
-def load_data_test():
-    files = os.listdir(file_path)[:data_size]
-    BUFFER_SIZE = len(files)
-    ds = tf.data.Dataset.from_tensor_slices((files, files, files))
-    ds = ds.shuffle(BUFFER_SIZE)
-    ds = ds.map(parse_function_test,
-                num_parallel_calls=tf.data.experimental.AUTOTUNE)
-    ds = ds.batch(batch_size, drop_remainder=True)
-    ds = ds.prefetch(1)
-    #print(ds)
-    return ds
 
 
 def load_images(file):
@@ -208,11 +150,25 @@ def load_images(file):
 train_low_data = []
 train_high_data = []
 train_low_data_names = glob(input_low_path+'/*.png')
-train_low_data_names.sort()
+#train_low_data_names.sort()
 train_high_data_names = glob(input_high_path + '/*.png')
-train_high_data_names.sort()
+#train_high_data_names.sort()
 assert len(train_low_data_names) == len(train_high_data_names)
+
+#print(train_low_data_names)
+#print(train_high_data_names)
+#c = list(zip(train_low_data_names, train_high_data_names))
+
+#random.shuffle(c)
+
+#train_low_data_names, train_high_data_names = zip(*c)
+
+
 print('[*] Number of training data: %d' % len(train_low_data_names))
+
+#print(train_low_data_names)
+#print(train_high_data_names)
+
 for idx in range(len(train_low_data_names)):
     low_im = load_images(train_low_data_names[idx])
     train_low_data.append(low_im)
@@ -228,14 +184,14 @@ def gradient(input_tensor, direction):
         kernel = smooth_kernel_x
     elif direction == "y":
         kernel = smooth_kernel_y
-    print(type(kernel))
-    print(type(input_tensor))
+    #print(type(kernel))
+    #print(type(input_tensor))
     gradient_orig = tf.abs(tf.nn.conv2d(
         input_tensor, kernel, strides=[1, 1, 1, 1], padding='SAME'))
     grad_min = tf.reduce_min(gradient_orig)
     grad_max = tf.reduce_max(gradient_orig)
-    grad_norm = tf.div((gradient_orig - grad_min),
-                       (grad_max - grad_min + 0.0001))
+    grad_norm = tf.divide((gradient_orig - grad_min),
+                          (grad_max - grad_min + 0.0001))
     return grad_norm
 
 
@@ -256,10 +212,12 @@ def mutual_i_input_loss(input_I_low, input_im):
     input_gray = tf.image.rgb_to_grayscale(input_im)
     low_gradient_x = gradient(input_I_low, "x")
     input_gradient_x = gradient(input_gray, "x")
-    x_loss = tf.abs(tf.div(low_gradient_x, tf.maximum(input_gradient_x, 0.01)))
+    x_loss = tf.abs(
+        tf.divide(low_gradient_x, tf.maximum(input_gradient_x, 0.01)))
     low_gradient_y = gradient(input_I_low, "y")
     input_gradient_y = gradient(input_gray, "y")
-    y_loss = tf.abs(tf.div(low_gradient_y, tf.maximum(input_gradient_y, 0.01)))
+    y_loss = tf.abs(
+        tf.divide(low_gradient_y, tf.maximum(input_gradient_y, 0.01)))
     mut_loss = tf.reduce_mean(x_loss + y_loss)
     return mut_loss
 
@@ -283,23 +241,38 @@ loss_Decom = 1*recon_loss_high + 1*recon_loss_low \
 losses = []
 
 
+def compute_loss(R_low, I_low, output_low, R_high, I_high, output_high, input_low, input_high):
+    R_avg = (R_low + R_high)/2.0
+    vgg_ref = VGG(R_avg)
+    vgg_orig = VGG(input_high)
+    I_enhanced = tf.image.adjust_gamma(I_low, 0.5)
+    output_enhanced = tf.math.multiply(R_low, I_enhanced)
+    loss = 1.0*tf.reduce_mean(tf.abs(vgg_ref - vgg_orig)) + 0.1 * tf.reduce_mean(tf.abs(R_low - R_high)) + 1.0 * tf.reduce_mean(tf.abs(output_low - input_low)) + 1.0 * tf.reduce_mean(tf.abs(output_high - input_high)) + \
+        1.0 * tf.reduce_mean(tf.abs(output_enhanced - input_high)) + 0.015*mutual_i_loss(I_low, I_high) + \
+        0.01*mutual_i_input_loss(I_high, input_high) + \
+        0.01*mutual_i_input_loss(I_low, input_low)
+    #loss =   0.01 * tf.reduce_mean(tf.abs(R_low - R_high)) + 1.0* tf.reduce_mean(tf.abs(output_low - input_low)) + 1.0* tf.reduce_mean(tf.abs(output_high - input_high)) + 0.2*mutual_i_loss(I_low, I_high) + 0.15*mutual_i_input_loss(I_high, input_high) + 0.15*mutual_i_input_loss(I_low, input_low)
+    return loss
+
+
 def step(input_low, input_high):
     with tf.GradientTape() as tape:
         R_low, I_low, output_low = model(input_low)
         R_high, I_high, output_high = model(input_high)
-        loss = 0.01 * tf.reduce_mean(tf.abs(R_low - R_high)) + tf.reduce_mean(tf.abs(output_low - input_low)) + tf.reduce_mean(tf.abs(
-            output_high - input_high)) + 0.2 * mutual_i_loss(I_low, I_high) + 0.15*mutual_i_input_loss(I_high, input_high) + 0.15*mutual_i_input_loss(I_low, input_low)
+        loss = compute_loss(R_low, I_low, output_low, R_high,
+                            I_high, output_high, input_low, input_high)
+        #R_avg = (R_low + R_high)/2.0
+        #vgg_ref = VGG.predict(R_high)
+        #vgg_orig = VGG.predict(input_high)
+        #loss =  tf.reduce_mean(tf.abs(vgg_ref - vgg_orig)) + 0.5 * tf.reduce_mean(tf.abs(R_low - R_high)) + 0.5* tf.reduce_mean(tf.abs(output_low - input_low)) + 0.5* tf.reduce_mean(tf.abs(output_high - input_high))
+
+        # + 0.2 * mutual_i_loss(I_low, I_high) + 0.15*mutual_i_input_loss(I_high, input_high) + 0.15*mutual_i_input_loss(I_low, input_low)
         losses.append(loss)
 
     grads = tape.gradient(loss, model.trainable_variables)
     opt.apply_gradients(zip(grads, model.trainable_variables))
 
 
-#H = model.fit(train_ds, epochs=1, use_multiprocessing = True, callbacks=[checkpoint, es], verbose=1)
-    #pred1 = model(X)
-    #loss = categorical_crossentropy(y, pred)
-    #grads = tape.gradient(loss, model.trainable_variables)
-    #opt.apply_gradients(zip(grads, model.trainable_variables))
 print(len(train_low_data))
 for data in train_low_data:
   print(type(data))
@@ -314,19 +287,26 @@ def train():
         for i in range(num_updates):
             start = i*batch_size
             end = start+batch_size
-            #.stack(arrays, axis=0)
             input_low = np.stack(train_low_data[start:end], axis=0)
             input_high = np.stack(train_high_data[start:end], axis=0)
+            num_patches = int(input_low.shape[1]/patch_size)
+            for patch in range(num_patches):
+              patch_start = patch*patch_size
+              patch_end = patch_start+patch_size
+              step(input_high[:, patch_start:patch_end, patch_start:patch_end, :],
+                   input_low[:, patch_start:patch_end, patch_start:patch_end, :])
             #step(train_high_data[start:end], train_low_data[start:end])
-            step(input_high[:, 0:128, 0:128, :], input_low[:, 0:128, 0:128, :])
+            #step(input_high[:, 0:128, 0:128, :], input_low[:, 0:128, 0:128, :])
         print("Epoch : " + str(epoch) + " ....... Done")
 
-        if(epoch % 50 == 0):
+        if(epoch % 10 == 0):
           plt.title('Learning Curve')
           plt.xlabel('Epochs')
           plt.ylabel('Loss')
-          plt.plot(losses)
+          plt.plot(losses[0::100])
           plt.show()
+          model.save_weights(
+              '/content/drive/My Drive/Samsung Project/Decomposition Latest/Checkpoints_17/my_checkpoint'+str(epoch))
 
 
 #model.compile(optimizer=opt, loss = 'categorical_crossentropy', metrics=['accuracy'])
@@ -361,16 +341,30 @@ for idx in range(len(eval_low_data_names)):
 eval_input_low = np.stack(eval_low_data, axis=0)
 eval_input_high = np.stack(eval_high_data, axis=0)
 
+#size = 256
 low_eval_output_r, low_eval_output_i, low_eval_output_re = model(
-    eval_input_low[:, 0:256, 0:256, :])
+    eval_input_low[:, 0:400, 0:400, :])
 high_eval_output_r, high_eval_output_i, high_eval_output_re = model(
-    eval_input_high[:, 0:256, 0:256, :])
+    eval_input_high[:, 0:400, 0:400, :])
+
+I_test_enhanced = tf.image.adjust_gamma(low_eval_output_i, 1/2)
+I_test_enhanced_2 = tf.image.adjust_gamma(low_eval_output_i, 1/4)
+output_test_enhanced = tf.math.multiply(low_eval_output_r, I_test_enhanced)
 
 #output1, output2, output3 = model.predict(test_ds, steps=1)
+
 for i in range(low_eval_output_r.shape[0]):
-    img_r = save_img('/content/drive/My Drive/Samsung Project/Decomposition Latest/R_output/R' +
+    img_r = save_img('/content/drive/My Drive/Samsung Project/Decomposition Latest/R_output17/R' +
                      str(i)+'.png', low_eval_output_r[i])
-    img_s = save_img('/content/drive/My Drive/Samsung Project/Decomposition Latest/S_output/S' +
+    img_s = save_img('/content/drive/My Drive/Samsung Project/Decomposition Latest/S_output17/S' +
                      str(i)+'.png', low_eval_output_i[i])
-    img_o = save_img('/content/drive/My Drive/Samsung Project/Decomposition Latest/O_output/O' +
+    img_o = save_img('/content/drive/My Drive/Samsung Project/Decomposition Latest/O_output17/O' +
                      str(i)+'.png', low_eval_output_re[i])
+    img_i = save_img('/content/drive/My Drive/Samsung Project/Decomposition Latest/I_output17/E' +
+                     str(i)+'.png', I_test_enhanced[i])
+    img_i2 = save_img('/content/drive/My Drive/Samsung Project/Decomposition Latest/I2_output17/E' +
+                      str(i)+'.png', I_test_enhanced_2[i])
+    #img_e=save_img('/content/drive/My Drive/Samsung Project/Decomposition Latest/E_output15/E'+str(i)+'.png',output_test_enhanced[i])
+
+model.save_weights(
+    './weights')
